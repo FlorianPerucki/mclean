@@ -1,0 +1,412 @@
+# mclean cleaning rules.
+#
+# Each rule describes paths to scan. Rules are evaluated IN ORDER: a path already
+# claimed by an earlier rule is skipped by later ones, so put specific rules
+# BEFORE generic ones.
+#
+# Fields:
+#   id           unique identifier
+#   name         display name
+#   category     system | browsers | dev
+#   risk         safe (selected by default) | review (needs a look)
+#   paths        paths; `~` and `*` `?` wildcards allowed (per component)
+#   exclude      NAME patterns to ignore (e.g. "com.apple.*")
+#   split        one entry per matched path instead of a single grouped entry
+#   contents     empty the folder instead of removing the folder itself
+#   min_age_days ignore recently modified items
+#   min_size_mb  ignore smaller entries
+#   process      process name that must be closed before cleaning
+#   permanent    permanent deletion (no Trash)
+#
+# Add your own rules in ~/.config/mclean/rules.toml
+# (they are evaluated before these; the same id overrides a default rule).
+
+# ───────────────────────────── Browsers ─────────────────────────────
+
+[[rule]]
+id = "safari-cache"
+name = "Safari"
+category = "browsers"
+paths = ["~/Library/Caches/com.apple.Safari", "~/Library/Containers/com.apple.Safari/Data/Library/Caches"]
+process = "Safari"
+explanation = "Safari web cache. Pages will be downloaded again on your next visit."
+
+[[rule]]
+id = "chrome-cache"
+name = "Google Chrome"
+category = "browsers"
+paths = [
+  "~/Library/Caches/Google/Chrome",
+  "~/Library/Application Support/Google/Chrome/*/Service Worker/CacheStorage",
+  "~/Library/Application Support/Google/Chrome/*/GPUCache",
+  "~/Library/Application Support/Google/Chrome/*/Code Cache",
+  "~/Library/Application Support/Google/Chrome/component_crx_cache",
+]
+process = "Google Chrome"
+explanation = "Chrome web cache, GPU cache and JavaScript code cache. History, passwords and cookies are not touched."
+
+[[rule]]
+id = "arc-cache"
+name = "Arc"
+category = "browsers"
+paths = [
+  "~/Library/Caches/Arc",
+  "~/Library/Caches/company.thebrowser.Browser",
+  "~/Library/Application Support/Arc/User Data/*/Service Worker/CacheStorage",
+  "~/Library/Application Support/Arc/User Data/*/GPUCache",
+  "~/Library/Application Support/Arc/User Data/*/Code Cache",
+]
+process = "Arc"
+explanation = "Arc browser web caches."
+
+[[rule]]
+id = "brave-cache"
+name = "Brave"
+category = "browsers"
+paths = [
+  "~/Library/Caches/BraveSoftware/Brave-Browser",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Service Worker/CacheStorage",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/GPUCache",
+  "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Code Cache",
+]
+process = "Brave Browser"
+explanation = "Brave web caches."
+
+[[rule]]
+id = "edge-cache"
+name = "Microsoft Edge"
+category = "browsers"
+paths = [
+  "~/Library/Caches/Microsoft Edge",
+  "~/Library/Application Support/Microsoft Edge/*/Service Worker/CacheStorage",
+  "~/Library/Application Support/Microsoft Edge/*/GPUCache",
+  "~/Library/Application Support/Microsoft Edge/*/Code Cache",
+]
+process = "Microsoft Edge"
+explanation = "Edge web caches."
+
+[[rule]]
+id = "vivaldi-cache"
+name = "Vivaldi"
+category = "browsers"
+paths = ["~/Library/Caches/Vivaldi", "~/Library/Application Support/Vivaldi/*/Service Worker/CacheStorage", "~/Library/Application Support/Vivaldi/*/GPUCache"]
+process = "Vivaldi"
+explanation = "Vivaldi web caches."
+
+[[rule]]
+id = "firefox-cache"
+name = "Firefox"
+category = "browsers"
+paths = ["~/Library/Caches/Firefox/Profiles/*/cache2", "~/Library/Caches/Firefox/Profiles/*/startupCache"]
+process = "firefox"
+explanation = "Firefox web cache."
+
+# ───────────────────────────── Developers ─────────────────────────────
+
+[[rule]]
+id = "xcode-deriveddata"
+name = "Xcode – DerivedData"
+category = "dev"
+paths = ["~/Library/Developer/Xcode/DerivedData"]
+contents = true
+process = "Xcode"
+explanation = "Xcode indexes and build products. Rebuilt on the next build (the first build will be slower)."
+
+[[rule]]
+id = "xcode-device-support"
+name = "Xcode – iOS/watchOS DeviceSupport"
+category = "dev"
+risk = "review"
+paths = ["~/Library/Developer/Xcode/iOS DeviceSupport/*", "~/Library/Developer/Xcode/watchOS DeviceSupport/*", "~/Library/Developer/Xcode/tvOS DeviceSupport/*", "~/Library/Developer/Xcode/visionOS DeviceSupport/*"]
+split = true
+min_age_days = 60
+explanation = "Debug symbols copied from your devices, one folder per OS version. Old versions are useless; they are copied again when you plug the device in."
+
+[[rule]]
+id = "xcode-archives"
+name = "Xcode – Archives"
+category = "dev"
+risk = "review"
+paths = ["~/Library/Developer/Xcode/Archives/*"]
+split = true
+min_age_days = 90
+explanation = "Archives of shipped apps. They hold the dSYMs needed to symbolicate crashes of production builds: keep them if the app is still distributed."
+
+[[rule]]
+id = "xcode-caches"
+name = "Xcode – caches"
+category = "dev"
+paths = ["~/Library/Caches/com.apple.dt.Xcode", "~/Library/Developer/Xcode/Products", "~/Library/Developer/XCTestDevices", "~/Library/Developer/CoreSimulator/Caches", "~/Library/Logs/CoreSimulator"]
+process = "Xcode"
+explanation = "Xcode, simulator and test caches."
+
+[[rule]]
+id = "spm-cache"
+name = "Swift Package Manager"
+category = "dev"
+paths = ["~/Library/Caches/org.swift.swiftpm", "~/Library/org.swift.swiftpm", "~/.cache/swift-package-manager"]
+explanation = "SwiftPM dependency cache, downloaded again when needed."
+
+[[rule]]
+id = "cocoapods"
+name = "CocoaPods"
+category = "dev"
+paths = ["~/Library/Caches/CocoaPods"]
+explanation = "CocoaPods pod cache."
+
+[[rule]]
+id = "homebrew"
+name = "Homebrew – downloads"
+category = "dev"
+paths = ["~/Library/Caches/Homebrew"]
+contents = true
+explanation = "Bottles and sources downloaded by Homebrew (same as `brew cleanup -s`). Installed packages are not touched."
+
+[[rule]]
+id = "npm"
+name = "npm"
+category = "dev"
+paths = ["~/.npm/_cacache", "~/.npm/_logs", "~/.npm/_npx"]
+explanation = "npm cache (same as `npm cache clean --force`)."
+
+[[rule]]
+id = "pnpm"
+name = "pnpm"
+category = "dev"
+risk = "review"
+paths = ["~/Library/pnpm/store", "~/Library/Caches/pnpm", "~/.pnpm-store", "~/.local/share/pnpm/store"]
+explanation = "Global pnpm store. Existing projects hard-link into it: prefer `pnpm store prune` if your projects are installed."
+
+[[rule]]
+id = "yarn"
+name = "Yarn"
+category = "dev"
+paths = ["~/Library/Caches/Yarn", "~/.yarn/berry/cache", "~/.cache/yarn"]
+explanation = "Yarn cache (same as `yarn cache clean`)."
+
+[[rule]]
+id = "bun"
+name = "Bun"
+category = "dev"
+paths = ["~/.bun/install/cache"]
+explanation = "Bun package cache."
+
+[[rule]]
+id = "node-misc"
+name = "Node.js – misc caches"
+category = "dev"
+paths = ["~/.node-gyp", "~/Library/Caches/node-gyp", "~/.cache/node-gyp", "~/.cache/node/corepack", "~/.cache/electron", "~/Library/Caches/electron", "~/Library/Caches/ms-playwright", "~/.cache/puppeteer", "~/.cache/typescript", "~/.cache/prisma", "~/.cache/prettier", "~/.cache/eslint", "~/.turbo/cache", "~/.parcel-cache", "~/.cache/vite", "~/.cache/webpack"]
+explanation = "node-gyp headers, Electron/Playwright/Puppeteer binaries, JS tool caches. Downloaded again when needed."
+
+[[rule]]
+id = "pip"
+name = "Python – pip, uv, poetry"
+category = "dev"
+paths = ["~/Library/Caches/pip", "~/.cache/pip", "~/Library/Caches/pypoetry", "~/.cache/pypoetry", "~/.cache/uv", "~/Library/Caches/uv", "~/.cache/pre-commit", "~/.cache/ruff", "~/.cache/mypy", "~/.pyenv/cache", "~/.conda/pkgs"]
+explanation = "Python package caches. Virtual environments are not touched."
+
+[[rule]]
+id = "huggingface"
+name = "Hugging Face models"
+category = "dev"
+risk = "review"
+paths = ["~/.cache/huggingface/hub/*"]
+split = true
+min_size_mb = 50
+explanation = "Models downloaded by transformers/diffusers. Can be downloaded again, but sometimes very slowly."
+
+[[rule]]
+id = "cargo"
+name = "Rust – Cargo"
+category = "dev"
+paths = ["~/.cargo/registry/cache", "~/.cargo/registry/src", "~/.cargo/git/checkouts"]
+explanation = "Downloaded crate sources and archives. Downloaded again on the next build."
+
+[[rule]]
+id = "go"
+name = "Go – build and module caches"
+category = "dev"
+paths = ["~/Library/Caches/go-build", "~/.cache/go-build", "~/go/pkg/mod/cache/download"]
+explanation = "Go build cache and module archives (same as `go clean -cache -modcache`)."
+
+[[rule]]
+id = "gradle"
+name = "Gradle"
+category = "dev"
+paths = ["~/.gradle/caches", "~/.gradle/wrapper/dists", "~/.gradle/daemon"]
+process = "java"
+explanation = "Gradle caches and distributions. Downloaded again on the next build."
+
+[[rule]]
+id = "maven"
+name = "Maven / Ivy / sbt"
+category = "dev"
+risk = "review"
+paths = ["~/.m2/repository", "~/.ivy2/cache", "~/.sbt/boot"]
+explanation = "Local Java/Scala dependency repositories. Downloaded again on the next build."
+
+[[rule]]
+id = "android"
+name = "Android – caches"
+category = "dev"
+paths = ["~/.android/cache", "~/.android/build-cache", "~/Library/Caches/Google/AndroidStudio*"]
+explanation = "Android Studio and Android Gradle plugin caches."
+
+[[rule]]
+id = "flutter-dart"
+name = "Flutter / Dart"
+category = "dev"
+paths = ["~/.pub-cache/hosted", "~/.dartServer", "~/.cache/flutter"]
+explanation = "pub packages and Dart analyzer caches."
+
+[[rule]]
+id = "ruby"
+name = "Ruby / PHP / .NET / Elixir"
+category = "dev"
+paths = ["~/.gem/specs", "~/.bundle/cache", "~/.composer/cache", "~/Library/Caches/composer", "~/.nuget/packages", "~/.hex/cache", "~/.cpan/build"]
+explanation = "Package manager caches."
+
+[[rule]]
+id = "docker-buildx"
+name = "Docker – buildx cache"
+category = "dev"
+paths = ["~/.docker/buildx/cache"]
+explanation = "buildx build cache. For images and volumes, use `docker system prune` (see Health)."
+
+[[rule]]
+id = "jetbrains"
+name = "JetBrains – caches and logs"
+category = "dev"
+paths = ["~/Library/Caches/JetBrains/*", "~/Library/Logs/JetBrains/*"]
+split = true
+min_size_mb = 10
+explanation = "JetBrains IDE indexes and caches (they will re-index). Old IDE versions often leave GBs of caches behind."
+
+[[rule]]
+id = "vscode"
+name = "VS Code / Cursor – caches"
+category = "dev"
+paths = [
+  "~/Library/Application Support/Code/Cache", "~/Library/Application Support/Code/CachedData", "~/Library/Application Support/Code/CachedExtensionVSIXs", "~/Library/Application Support/Code/Code Cache", "~/Library/Application Support/Code/GPUCache", "~/Library/Application Support/Code/logs",
+  "~/Library/Application Support/Cursor/Cache", "~/Library/Application Support/Cursor/CachedData", "~/Library/Application Support/Cursor/Code Cache", "~/Library/Application Support/Cursor/GPUCache", "~/Library/Application Support/Cursor/logs",
+]
+process = "Electron"
+explanation = "Caches of Electron-based editors. Extensions and settings are not touched."
+
+[[rule]]
+id = "terraform-misc"
+name = "Other tools (Terraform, Bazel, kube…)"
+category = "dev"
+paths = ["~/.terraform.d/plugin-cache", "~/.cache/bazel", "~/.kube/cache", "~/.cache/terraform", "~/.cache/zig", "~/.sonar/cache", "~/.vagrant.d/tmp", "~/.cache/gitlab-runner"]
+explanation = "Build and infrastructure tool caches."
+
+# ───────────────────────────── System ─────────────────────────────
+
+[[rule]]
+id = "trash"
+name = "Trash"
+category = "system"
+paths = ["~/.Trash"]
+contents = true
+permanent = true
+explanation = "Files already in the Trash. PERMANENT deletion: they cannot be recovered."
+
+[[rule]]
+id = "ios-updates"
+name = "Downloaded iOS updates"
+category = "system"
+paths = ["~/Library/iTunes/iPhone Software Updates/*", "~/Library/iTunes/iPad Software Updates/*", "~/Library/iTunes/iPod Software Updates/*", "~/Library/iTunes/Apple TV Software Updates/*"]
+explanation = "Device update files (.ipsw), useless once the update is installed."
+
+[[rule]]
+id = "ios-backups"
+name = "iPhone / iPad backups"
+category = "system"
+risk = "review"
+paths = ["~/Library/Application Support/MobileSync/Backup/*"]
+split = true
+explanation = "Local iOS device backups. Only delete backups of devices you no longer own, or if you back up to iCloud."
+
+[[rule]]
+id = "mail-downloads"
+name = "Mail attachments"
+category = "system"
+paths = ["~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads", "~/Library/Mail Downloads"]
+contents = true
+min_age_days = 7
+explanation = "Attachments opened from Mail. They remain available in the emails themselves."
+
+[[rule]]
+id = "crash-reports"
+name = "Crash reports"
+category = "system"
+paths = ["~/Library/Logs/DiagnosticReports/*", "~/Library/Application Support/CrashReporter/*"]
+min_age_days = 7
+explanation = "Crash reports already sent (or not) to Apple and developers."
+
+[[rule]]
+id = "user-logs"
+name = "User logs"
+category = "system"
+paths = ["~/Library/Logs/*"]
+exclude = ["mclean", "DiagnosticReports"]
+min_age_days = 3
+explanation = "Application logs. Only useful to diagnose an ongoing problem."
+
+[[rule]]
+id = "saved-state"
+name = "Saved window states"
+category = "system"
+risk = "review"
+paths = ["~/Library/Saved Application State/*"]
+min_age_days = 30
+explanation = "Window positions restored when apps relaunch. Harmless, but windows won't be restored."
+
+[[rule]]
+id = "quicklook"
+name = "Quick Look thumbnails"
+category = "system"
+paths = ["~/Library/Caches/com.apple.QuickLook.thumbnailcache"]
+explanation = "Thumbnails generated by Finder, recreated on demand."
+
+[[rule]]
+id = "apple-container-caches"
+name = "Apple system service caches"
+category = "system"
+risk = "review"
+paths = ["~/Library/Containers/com.apple.*/Data/Library/Caches"]
+exclude = ["com.apple.mail", "com.apple.Safari"]
+split = true
+min_size_mb = 20
+explanation = "Caches of built-in macOS services (e.g. mediaanalysisd = Photos face/object analysis). Safe to delete, but macOS will redo the work in the background (CPU, battery) to rebuild them."
+
+[[rule]]
+id = "container-caches"
+name = "Sandboxed app caches"
+category = "system"
+paths = ["~/Library/Containers/*/Data/Library/Caches"]
+exclude = ["com.apple.mail", "com.apple.Safari"]
+split = true
+min_size_mb = 20
+explanation = "Caches of Mac App Store apps (inside their container). Recreated automatically."
+
+[[rule]]
+id = "user-caches"
+name = "App caches"
+category = "system"
+paths = ["~/Library/Caches/*"]
+exclude = ["com.apple.HomeKit", "com.apple.Safari.SafeBrowsing", "CloudKit", "com.apple.akd", "com.apple.ap.adprivacyd", "FamilyCircle", "com.apple.bird", "com.apple.containermanagerd", "mclean"]
+split = true
+min_size_mb = 5
+explanation = "Temporary files the app recreates when needed. Quit the app before cleaning for best results."
+
+[[rule]]
+id = "xdg-cache"
+name = "~/.cache (CLI tools)"
+category = "system"
+paths = ["~/.cache/*"]
+exclude = ["mclean"]
+split = true
+min_size_mb = 20
+risk = "review"
+explanation = "Caches of command-line tools not covered by a specific rule."
