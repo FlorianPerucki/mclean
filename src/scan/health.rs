@@ -333,6 +333,60 @@ fn uptime() -> Vec<HealthItem> {
     ]
 }
 
+/// Processes holding the most compressed memory (top's CMPRS column):
+/// (name, pid, bytes), biggest first.
+fn top_compressed() -> Vec<(String, u32, u64)> {
+    let Some(out) = run(
+        "top",
+        &[
+            "-l",
+            "1",
+            "-o",
+            "cmprs",
+            "-n",
+            "8",
+            "-stats",
+            "pid,cmprs,command",
+        ],
+    ) else {
+        return vec![];
+    };
+    parse_top_compressed(&out)
+}
+
+fn parse_top_compressed(out: &str) -> Vec<(String, u32, u64)> {
+    let mut v: Vec<(String, u32, u64)> = out
+        .lines()
+        .skip_while(|l| !l.trim_start().starts_with("PID"))
+        .skip(1)
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let pid = it.next()?.parse().ok()?;
+            let bytes = parse_top_size(it.next()?)?;
+            let name = it.collect::<Vec<_>>().join(" ");
+            (bytes >= 1 << 20 && !name.is_empty()).then_some((name, pid, bytes))
+        })
+        .collect();
+    v.sort_by_key(|x| std::cmp::Reverse(x.2));
+    v
+}
+
+/// "1234M", "12K", "1.5G", "0B", optionally followed by + or -.
+fn parse_top_size(s: &str) -> Option<u64> {
+    let s = s.trim_end_matches(['+', '-']);
+    let (num, unit) = s.split_at(s.find(|c: char| c.is_ascii_alphabetic())?);
+    let n: f64 = num.parse().ok()?;
+    let mult = match unit {
+        "B" => 1.0,
+        "K" => 1024.0,
+        "M" => 1024.0 * 1024.0,
+        "G" => 1024.0 * 1024.0 * 1024.0,
+        "T" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((n * mult) as u64)
+}
+
 fn memory() -> Vec<HealthItem> {
     let mut v = Vec::new();
     if let Some(out) = run("sysctl", &["-n", "vm.swapusage"]) {
@@ -353,9 +407,25 @@ fn memory() -> Vec<HealthItem> {
         } else {
             Status::Ok
         };
-        v.push(HealthItem::new("swap", "Swap", st, format!("{:.1} GB of swap in use", mb / 1024.0)).advice(
+        let mut advice = String::from(
             "High swap means RAM is short: quit memory-hungry apps (browser with many tabs, Docker, VMs) or restart.",
-        ));
+        );
+        let top = top_compressed();
+        if !top.is_empty() {
+            advice.push_str("\nmacOS does not report swap per process. What it swaps out is compressed memory; the biggest users:");
+            for (name, pid, b) in top {
+                advice.push_str(&format!("\n  {:>9}  {name} (pid {pid})", util::fmt_size(b)));
+            }
+        }
+        v.push(
+            HealthItem::new(
+                "swap",
+                "Swap",
+                st,
+                format!("{:.1} GB of swap in use", mb / 1024.0),
+            )
+            .advice(advice),
+        );
     }
     if let Some(out) = run("memory_pressure", &["-Q"])
         && let Some(pct) = out
@@ -709,4 +779,18 @@ fn simulators() -> Vec<HealthItem> {
             cmd: "xcrun simctl delete unavailable".into(),
         }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_top_compressed() {
+        let out = "Processes: 600 total\nPhysMem: 15G used\n\nPID    CMPRS  COMMAND\n812    1532M+ Google Chrome He\n77     12K    WindowServer\n4310   2.1G   Docker\n";
+        let v = parse_top_compressed(out);
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].0, "Docker");
+        assert_eq!(v[1], ("Google Chrome He".into(), 812, 1532 * 1024 * 1024));
+    }
 }
