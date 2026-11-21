@@ -88,15 +88,19 @@ fn row_style(state: u8) -> Style {
 const CURSOR_BG: Color = Color::Rgb(40, 60, 80);
 
 /// Paints the cursor bar on every span except the tick box (spans[box_at]),
-/// so the box keeps its colour on the current line.
+/// so the box keeps its colour on the current line. Text colours that would
+/// be hard to read on the bar (grey, blue) are brightened. Pass
+/// `usize::MAX` as `box_at` for rows without a tick box.
 fn with_cursor(mut spans: Vec<Span<'static>>, cursor: bool, box_at: usize) -> Line<'static> {
     if cursor {
         for (k, sp) in spans.iter_mut().enumerate() {
             if k != box_at {
                 sp.style = sp.style.bg(CURSOR_BG).add_modifier(Modifier::BOLD);
-                if sp.style.fg == Some(DIM) {
-                    sp.style = sp.style.fg(Color::Gray);
-                }
+                sp.style = match sp.style.fg {
+                    Some(DIM) => sp.style.fg(Color::Gray),
+                    Some(Color::LightBlue | Color::Blue) => sp.style.fg(Color::White),
+                    _ => sp.style,
+                };
             }
         }
     }
@@ -291,6 +295,7 @@ fn draw_menu(f: &mut Frame, app: &mut App, area: Rect) {
     let [left, right] =
         Layout::horizontal([Constraint::Length(56), Constraint::Min(30)]).areas(area);
     let items = app.menu_items();
+    let sel = app.menu_state.selected();
     let list_items: Vec<ListItem> = items
         .iter()
         .enumerate()
@@ -301,11 +306,15 @@ fn draw_menu(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 "  ".into()
             };
-            let mut lines = vec![Line::from(vec![
-                Span::styled(num, Style::new().fg(DIM)),
-                Span::styled(pad(&label, 33), st),
-                Span::styled(format!("{size:>14}"), st),
-            ])];
+            let mut lines = vec![with_cursor(
+                vec![
+                    Span::styled(num, Style::new().fg(DIM)),
+                    Span::styled(pad(&label, 33), st),
+                    Span::styled(format!("{size:>14}"), st),
+                ],
+                sel == Some(i),
+                usize::MAX,
+            )];
             // Spacer after the last entry of a group (after, so the cursor never sits on it).
             if matches!(
                 it,
@@ -794,23 +803,29 @@ fn draw_category(f: &mut Frame, app: &mut App, area: Rect, scope: Option<Categor
 
 fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
     let [top, bottom] = Layout::vertical([Constraint::Min(5), Constraint::Length(11)]).areas(area);
+    let sel = app.health_state.selected();
     let items: Vec<ListItem> = app
         .health
         .iter()
-        .map(|h| {
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!(" {}  ", h.status.icon()),
-                    Style::new().fg(status_color(h.status)).bold(),
-                ),
-                Span::styled(pad(&h.name, 46), Style::new().bold()),
-                Span::styled(h.message.clone(), Style::new().fg(DIM)),
-                if h.fix.is_some() {
-                    Span::styled("  ⚙", Style::new().fg(ACCENT))
-                } else {
-                    Span::raw("")
-                },
-            ]))
+        .enumerate()
+        .map(|(k, h)| {
+            ListItem::new(with_cursor(
+                vec![
+                    Span::styled(
+                        format!(" {}  ", h.status.icon()),
+                        Style::new().fg(status_color(h.status)).bold(),
+                    ),
+                    Span::styled(pad(&h.name, 46), Style::new().bold()),
+                    Span::styled(h.message.clone(), Style::new().fg(DIM)),
+                    if h.fix.is_some() {
+                        Span::styled("  ⚙", Style::new().fg(ACCENT))
+                    } else {
+                        Span::raw("")
+                    },
+                ],
+                sel == Some(k),
+                usize::MAX,
+            ))
         })
         .collect();
     f.render_stateful_widget(
@@ -852,20 +867,26 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_apps(f: &mut Frame, app: &mut App, area: Rect) {
     let list = app.filtered_apps();
+    let sel = app.apps_state.selected();
     let items: Vec<ListItem> = list
         .iter()
-        .map(|&i| {
+        .enumerate()
+        .map(|(k, &i)| {
             let a = &app.apps[i];
             let size = if a.size == 0 {
                 "…".to_string()
             } else {
                 fmt_size(a.size)
             };
-            ListItem::new(Line::from(vec![
-                Span::styled(pad(&a.name, 36), Style::new().bold()),
-                Span::raw(format!("{size:>10}   ")),
-                Span::styled(a.bundle_id.clone(), Style::new().fg(DIM)),
-            ]))
+            ListItem::new(with_cursor(
+                vec![
+                    Span::styled(pad(&a.name, 36), Style::new().bold()),
+                    Span::raw(format!("{size:>10}   ")),
+                    Span::styled(a.bundle_id.clone(), Style::new().fg(DIM)),
+                ],
+                sel == Some(k),
+                usize::MAX,
+            ))
         })
         .collect();
     let title = if app.filtering || !app.apps_filter.is_empty() {
@@ -931,10 +952,12 @@ fn draw_space(f: &mut Frame, app: &mut App, area: Rect) {
     let total = sp.total().max(1);
     let max = sp.entries.first().and_then(|e| e.size).unwrap_or(1).max(1);
     let barw = 24usize;
+    let sel = sp.state.selected();
     let items: Vec<ListItem> = sp
         .entries
         .iter()
-        .map(|e| {
+        .enumerate()
+        .map(|(k, e)| {
             let (size, bar, pct) = match e.size {
                 Some(s) => {
                     let n = (((s as f64 / max as f64) * barw as f64).round() as usize).min(barw);
@@ -951,16 +974,20 @@ fn draw_space(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 e.name.clone()
             };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{size:>9} "), Style::new().bold()),
-                Span::styled(bar, Style::new().fg(ACCENT)),
-                Span::styled(format!(" {pct}  "), Style::new().fg(DIM)),
-                if e.is_dir {
-                    Span::styled(name, Style::new().fg(Color::LightBlue).bold())
-                } else {
-                    Span::raw(name)
-                },
-            ]))
+            ListItem::new(with_cursor(
+                vec![
+                    Span::styled(format!("{size:>9} "), Style::new().bold()),
+                    Span::styled(bar, Style::new().fg(ACCENT)),
+                    Span::styled(format!(" {pct}  "), Style::new().fg(DIM)),
+                    if e.is_dir {
+                        Span::styled(name, Style::new().fg(Color::LightBlue).bold())
+                    } else {
+                        Span::raw(name)
+                    },
+                ],
+                sel == Some(k),
+                usize::MAX,
+            ))
         })
         .collect();
     let pending = sp.pending();
