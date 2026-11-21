@@ -92,6 +92,12 @@ pub struct UninstallPlan {
     pub state: ListState,
 }
 
+/// Files of a health item being picked one by one (focus in the Details pane).
+pub struct HealthPick {
+    pub ticked: Vec<bool>,
+    pub state: ListState,
+}
+
 pub struct App {
     pub screen: Screen,
     pub steps: Vec<StepState>,
@@ -110,6 +116,7 @@ pub struct App {
     apps_rx: Option<Receiver<(PathBuf, u64)>>,
     pub uninstall: Option<UninstallPlan>,
     pub space: Option<SpaceView>,
+    pub health_pick: Option<HealthPick>,
     pub modal: Option<Modal>,
     pub mode: Mode,
     pub toast: Option<String>,
@@ -161,6 +168,7 @@ impl App {
             apps_rx: None,
             uninstall: None,
             space: None,
+            health_pick: None,
             modal: None,
             mode: Mode::Trash,
             toast: None,
@@ -318,6 +326,7 @@ impl App {
                                 warn
                             );
                             self.health = h;
+                            self.health_pick = None;
                         }
                         Payload::Error(e) => {
                             self.steps[i].text = format!("error: {e}");
@@ -397,12 +406,14 @@ impl App {
             }
         }
         if self.screen == Screen::Health {
+            self.health_pick = None;
             self.rescan_health();
         }
         if self.screen == Screen::Space
             && let Some(sp) = &mut self.space
         {
             sp.refresh();
+            sp.prune_marks();
         }
         self.cleaned_session += rep.freed;
         self.disk = disk();
@@ -667,6 +678,8 @@ impl App {
             k
         };
         let in_cat = matches!(self.screen, Screen::Category(_) | Screen::Smart);
+        // ← / Esc leave the file list of a health item before leaving the screen.
+        let picking = self.screen == Screen::Health && self.health_pick.is_some();
         match k.code {
             KeyCode::Char('?') => {
                 self.modal = Some(Modal::Help);
@@ -691,13 +704,15 @@ impl App {
                 return;
             }
             KeyCode::Esc => {
-                if self.screen != Screen::Space {
+                if self.screen != Screen::Space && !picking {
                     self.back();
                     return;
                 }
             }
             // In a category, ← / h collapses first (handled below).
-            KeyCode::Left | KeyCode::Char('h') if self.screen != Screen::Space && !in_cat => {
+            KeyCode::Left | KeyCode::Char('h')
+                if self.screen != Screen::Space && !in_cat && !picking =>
+            {
                 self.back();
                 return;
             }
@@ -741,9 +756,23 @@ impl App {
             }
             Screen::Category(c) => self.on_category_key(Some(c), k),
             Screen::Smart => self.on_category_key(None, k),
+            Screen::Health if picking => self.on_health_pick_key(k),
             Screen::Health => {
                 let n = self.health.len();
                 match k.code {
+                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Char(' ') => {
+                        match self.health_files() {
+                            Some(paths) if !paths.is_empty() => {
+                                let mut state = ListState::default();
+                                state.select(Some(0));
+                                self.health_pick = Some(HealthPick {
+                                    ticked: vec![false; paths.len()],
+                                    state,
+                                });
+                            }
+                            _ => self.toast = Some("No files to pick for this item.".into()),
+                        }
+                    }
                     KeyCode::Up | KeyCode::Char('k') => move_sel(&mut self.health_state, n, -1),
                     KeyCode::Down | KeyCode::Char('j') => move_sel(&mut self.health_state, n, 1),
                     KeyCode::Char('r') => {
@@ -901,6 +930,52 @@ impl App {
                             self.reveal(&p);
                         }
                     }
+                    KeyCode::Char(' ') => {
+                        if let Some((p, s)) = sp.current() {
+                            if sp.is_marked(&p) {
+                                sp.toggle_mark(p, s);
+                                sp.move_sel(1);
+                            } else {
+                                match actions::check_safe(&p) {
+                                    Err(e) => self.toast = Some(format!("Not allowed: {e}")),
+                                    Ok(()) => {
+                                        sp.toggle_mark(p, s);
+                                        sp.move_sel(1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char('u') => {
+                        let n = sp.marked.len();
+                        sp.marked.clear();
+                        if n > 0 {
+                            self.toast = Some(format!("{n} mark(s) cleared"));
+                        }
+                    }
+                    KeyCode::Char('d') | KeyCode::Delete if !sp.marked.is_empty() => {
+                        let items: Vec<Finding> = sp
+                            .marked_roots()
+                            .into_iter()
+                            .filter(|(p, _)| actions::check_safe(p).is_ok())
+                            .map(|(p, s)| {
+                                let mut f = Finding::new(
+                                    Category::Large,
+                                    format!("space:{}", p.display()),
+                                    util::pretty(&p),
+                                );
+                                f.paths = vec![p];
+                                f.size = s;
+                                f.selected = true;
+                                f
+                            })
+                            .collect();
+                        self.modal = Some(Modal::Confirm {
+                            title: format!("Delete {} marked item(s)", items.len()),
+                            items,
+                            from_findings: false,
+                        });
+                    }
                     KeyCode::Char('d') | KeyCode::Delete => {
                         if let Some((p, s)) = sp.current() {
                             match actions::check_safe(&p) {
@@ -926,6 +1001,82 @@ impl App {
                     _ => {}
                 }
             }
+        }
+    }
+
+    /// Files the selected health item would move to the Trash.
+    pub fn health_files(&self) -> Option<&Vec<PathBuf>> {
+        let h = self.health.get(self.health_state.selected()?)?;
+        match &h.fix {
+            Some(Fix::Trash { paths, .. }) => Some(paths),
+            _ => None,
+        }
+    }
+
+    fn on_health_pick_key(&mut self, k: KeyEvent) {
+        let paths = self.health_files().cloned().unwrap_or_default();
+        let Some(pick) = &mut self.health_pick else {
+            return;
+        };
+        let n = paths.len();
+        let cur = pick.state.selected().filter(|&i| i < n);
+        match k.code {
+            KeyCode::Up | KeyCode::Char('k') => move_sel(&mut pick.state, n, -1),
+            KeyCode::Down | KeyCode::Char('j') => move_sel(&mut pick.state, n, 1),
+            KeyCode::PageDown => move_sel(&mut pick.state, n, 15),
+            KeyCode::PageUp => move_sel(&mut pick.state, n, -15),
+            KeyCode::Char(' ') => {
+                if let Some(i) = cur {
+                    pick.ticked[i] = !pick.ticked[i];
+                    move_sel(&mut pick.state, n, 1);
+                }
+            }
+            KeyCode::Char('a') => {
+                let all = pick.ticked.iter().all(|t| *t);
+                pick.ticked.iter_mut().for_each(|t| *t = !all);
+            }
+            KeyCode::Char('o') => {
+                if let Some(p) = cur.and_then(|i| paths.get(i)) {
+                    let p = p.clone();
+                    self.reveal(&p);
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('d') | KeyCode::Delete => {
+                let items: Vec<Finding> = paths
+                    .iter()
+                    .zip(&pick.ticked)
+                    .filter(|(_, t)| **t)
+                    .map(|(p, _)| {
+                        let mut f = Finding::new(
+                            Category::System,
+                            format!("fix-file:{}", p.display()),
+                            util::pretty(p),
+                        );
+                        f.paths = vec![p.clone()];
+                        f.size = util::disk_usage(p);
+                        f.selected = true;
+                        f
+                    })
+                    .collect();
+                if items.is_empty() {
+                    self.toast = Some("Nothing ticked: tick files with Space (a for all).".into());
+                } else {
+                    let title = self
+                        .health_state
+                        .selected()
+                        .and_then(|i| self.health.get(i))
+                        .map_or("Delete".into(), |h| h.name.clone());
+                    self.modal = Some(Modal::Confirm {
+                        title,
+                        items,
+                        from_findings: false,
+                    });
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Esc | KeyCode::Tab => {
+                self.health_pick = None
+            }
+            _ => {}
         }
     }
 

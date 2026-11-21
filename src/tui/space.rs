@@ -2,7 +2,7 @@
 
 use crate::util;
 use ratatui::widgets::ListState;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 
@@ -22,6 +22,9 @@ pub struct SpaceView {
     history: Vec<(PathBuf, usize)>,
     /// The user moved the selection since the folder was loaded.
     touched: bool,
+    /// Files and folders marked for deletion (Space), kept while browsing.
+    /// Value: size when known (0 while a folder is still being measured).
+    pub marked: BTreeMap<PathBuf, u64>,
 }
 
 impl SpaceView {
@@ -34,6 +37,7 @@ impl SpaceView {
             rx: None,
             history: vec![],
             touched: false,
+            marked: BTreeMap::new(),
         };
         v.load();
         v
@@ -114,6 +118,9 @@ impl SpaceView {
         if let Some(rx) = &self.rx {
             while let Ok((p, s)) = rx.try_recv() {
                 self.cache.insert(p.clone(), s);
+                if let Some(m) = self.marked.get_mut(&p) {
+                    *m = s;
+                }
                 if let Some(e) = self.entries.iter_mut().find(|e| e.path == p) {
                     e.size = Some(s);
                     changed = true;
@@ -135,6 +142,40 @@ impl SpaceView {
 
     pub fn current_path(&self) -> Option<PathBuf> {
         self.current().map(|c| c.0)
+    }
+
+    pub fn is_marked(&self, p: &Path) -> bool {
+        self.marked.contains_key(p)
+    }
+
+    /// Marks or unmarks a path. Returns true when it is now marked.
+    pub fn toggle_mark(&mut self, p: PathBuf, size: u64) -> bool {
+        if self.marked.remove(&p).is_some() {
+            false
+        } else {
+            self.marked.insert(p, size);
+            true
+        }
+    }
+
+    pub fn marked_total(&self) -> u64 {
+        self.marked_roots().iter().map(|(_, s)| s).sum()
+    }
+
+    /// Marked paths, without those inside another marked folder
+    /// (deleting the folder already takes them).
+    pub fn marked_roots(&self) -> Vec<(PathBuf, u64)> {
+        self.marked
+            .iter()
+            .filter(|(p, _)| !p.ancestors().skip(1).any(|a| self.marked.contains_key(a)))
+            .map(|(p, s)| (p.clone(), *s))
+            .collect()
+    }
+
+    /// Drops the marks of paths that no longer exist (after a deletion).
+    pub fn prune_marks(&mut self) {
+        self.marked
+            .retain(|p, _| std::fs::symlink_metadata(p).is_ok());
     }
 
     pub fn move_sel(&mut self, d: i64) {

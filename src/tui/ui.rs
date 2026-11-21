@@ -1,12 +1,14 @@
 use super::{App, MenuItem, Modal, Row, Screen};
 use crate::actions::Mode;
-use crate::model::{Category, Finding, Risk, Status};
+use crate::model::{Category, Finding, Fix, Risk, Status};
 use crate::util::{self, fmt_size};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Clear, Gauge, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Clear, Gauge, HighlightSpacing, List, ListItem, Paragraph, Wrap,
+};
 
 const ACCENT: Color = Color::Cyan;
 const SAFE: Color = Color::Green;
@@ -140,10 +142,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Screen::Category(_) | Screen::Smart => {
             "↑↓ · Space tick · Tab expand/fold · → ← · a all · Enter clean · o Finder · p mode · Esc back"
         }
-        Screen::Health => "↑↓ · Enter fix · r check again · Esc back",
+        Screen::Health if app.health_pick.is_some() => {
+            "↑↓ · Space tick · a all · Enter trash ticked · o Finder · ← back to the list"
+        }
+        Screen::Health => "↑↓ · Enter fix · → / Space pick files · r check again · Esc back",
         Screen::Apps => "↑↓ · Enter uninstall · / filter · s size · n name · o Finder · Esc back",
         Screen::Uninstall => "↑↓ · Space tick · Enter uninstall · o Finder · Esc back",
-        Screen::Space => "↑↓ · Enter/→ open · ←/Backspace up · d delete · o Finder · Esc menu",
+        Screen::Space => {
+            "↑↓ · Enter/→ open · ← up · Space mark · d delete marked (or current) · u unmark all · o Finder · Esc menu"
+        }
     };
     f.render_widget(
         Paragraph::new(Line::from(format!(" {hints}")).fg(DIM)),
@@ -802,7 +809,20 @@ fn draw_category(f: &mut Frame, app: &mut App, area: Rect, scope: Option<Categor
 }
 
 fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
-    let [top, bottom] = Layout::vertical([Constraint::Min(5), Constraint::Length(11)]).areas(area);
+    // Details grows to fit long advice and the file list, up to half the screen.
+    let details_h = app
+        .health_state
+        .selected()
+        .and_then(|i| app.health.get(i))
+        .map_or(11, |h| {
+            let files = match &h.fix {
+                Some(Fix::Trash { paths, .. }) => paths.len() + 3,
+                _ => 2,
+            };
+            ((h.advice.lines().count() + files + 5) as u16).clamp(11, (area.height / 2).max(11))
+        });
+    let [top, bottom] =
+        Layout::vertical([Constraint::Min(5), Constraint::Length(details_h)]).areas(area);
     let sel = app.health_state.selected();
     let items: Vec<ListItem> = app
         .health
@@ -836,19 +856,27 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
         top,
         &mut app.health_state,
     );
-    let mut lines = vec![];
-    if let Some(h) = app.health_state.selected().and_then(|i| app.health.get(i)) {
-        lines.push(Line::from(vec![
+    let Some(h) = app.health_state.selected().and_then(|i| app.health.get(i)) else {
+        return;
+    };
+    let mut lines = vec![
+        Line::from(vec![
             Span::styled(
                 format!("{} ", h.status.icon()),
                 Style::new().fg(status_color(h.status)),
             ),
             h.message.clone().bold(),
-        ]));
-        lines.push(Line::from(""));
-        for l in h.advice.lines() {
-            lines.push(Line::from(l.to_string()));
-        }
+        ]),
+        Line::from(""),
+    ];
+    for l in h.advice.lines() {
+        lines.push(Line::from(l.to_string()));
+    }
+    let files = match &h.fix {
+        Some(Fix::Trash { paths, .. }) => Some(paths),
+        _ => None,
+    };
+    let Some(files) = files else {
         if let Some(fx) = &h.fix {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -856,13 +884,78 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
                 Style::new().fg(ACCENT).bold(),
             )));
         }
+        f.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(block(" Details ")),
+            bottom,
+        );
+        return;
+    };
+
+    // Item with files to trash: they are listed and can be ticked one by one.
+    let label = h.fix.as_ref().map(|x| x.label()).unwrap_or_default();
+    let picking = app.health_pick.is_some();
+    let ticked: Vec<bool> = app
+        .health_pick
+        .as_ref()
+        .map_or_else(|| vec![false; files.len()], |p| p.ticked.clone());
+    let n_ticked = ticked.iter().filter(|t| **t).count();
+    let hint = if picking {
+        Line::from(vec![
+            "Space tick · a all · ".fg(DIM),
+            Span::styled(
+                format!("Enter: move {n_ticked} ticked file(s) to the Trash"),
+                Style::new().fg(ACCENT).bold(),
+            ),
+            " · o Finder · ← back".fg(DIM),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("→ / Space: pick files", Style::new().fg(ACCENT).bold()),
+            format!(" · Enter: {label} (all {})", files.len()).fg(DIM),
+        ])
+    };
+    let text_h = lines.len() as u16;
+    let rows: Vec<ListItem> = files
+        .iter()
+        .enumerate()
+        .map(|(k, p)| {
+            let st = if ticked.get(k).copied().unwrap_or(false) {
+                2
+            } else {
+                0
+            };
+            let mut spans = checkbox(st);
+            spans.push(Span::raw(util::pretty(p)));
+            let cur =
+                picking && app.health_pick.as_ref().and_then(|x| x.state.selected()) == Some(k);
+            ListItem::new(with_cursor(spans, cur, 0))
+        })
+        .collect();
+    let border = if picking {
+        Style::new().fg(ACCENT)
+    } else {
+        Style::new().fg(DIM)
+    };
+    let blk = block(" Details ").border_style(border);
+    let inner = blk.inner(bottom);
+    f.render_widget(blk, bottom);
+    let [t, l, hn] = Layout::vertical([
+        Constraint::Length(text_h),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), t);
+    let list = List::new(rows)
+        .highlight_symbol(Span::styled("▶ ", Style::new().fg(ACCENT).bold()))
+        .highlight_spacing(HighlightSpacing::Always);
+    match &mut app.health_pick {
+        Some(p) => f.render_stateful_widget(list, l, &mut p.state),
+        None => f.render_widget(list, l),
     }
-    f.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(block(" Details ")),
-        bottom,
-    );
+    f.render_widget(Paragraph::new(hint), hn);
 }
 
 fn draw_apps(f: &mut Frame, app: &mut App, area: Rect) {
@@ -953,6 +1046,11 @@ fn draw_space(f: &mut Frame, app: &mut App, area: Rect) {
     let max = sp.entries.first().and_then(|e| e.size).unwrap_or(1).max(1);
     let barw = 24usize;
     let sel = sp.state.selected();
+    // Inside a marked folder, everything shown goes with it.
+    let inherited = sp.path.ancestors().any(|a| sp.is_marked(a));
+    // Room left for the name: borders (2), cursor symbol (2), box (4),
+    // size (10), bar, percentage (8).
+    let name_w = (area.width as usize).saturating_sub(2 + 2 + 4 + 10 + barw + 8);
     let items: Vec<ListItem> = sp
         .entries
         .iter()
@@ -974,27 +1072,43 @@ fn draw_space(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 e.name.clone()
             };
-            ListItem::new(with_cursor(
-                vec![
-                    Span::styled(format!("{size:>9} "), Style::new().bold()),
-                    Span::styled(bar, Style::new().fg(ACCENT)),
-                    Span::styled(format!(" {pct}  "), Style::new().fg(DIM)),
-                    if e.is_dir {
-                        Span::styled(name, Style::new().fg(Color::LightBlue).bold())
-                    } else {
-                        Span::raw(name)
-                    },
-                ],
-                sel == Some(k),
-                usize::MAX,
-            ))
+            let name = pad(&name, name_w);
+            let state = if sp.is_marked(&e.path) {
+                2
+            } else if inherited {
+                1
+            } else {
+                0
+            };
+            let mut spans = checkbox(state);
+            spans.extend([
+                Span::styled(format!("{size:>9} "), Style::new().bold()),
+                Span::styled(bar, Style::new().fg(ACCENT)),
+                Span::styled(format!(" {pct:>5}  "), Style::new().fg(DIM)),
+                if e.is_dir {
+                    Span::styled(name, Style::new().fg(Color::LightBlue).bold())
+                } else {
+                    Span::raw(name)
+                },
+            ]);
+            ListItem::new(with_cursor(spans, sel == Some(k), 0))
         })
         .collect();
     let pending = sp.pending();
+    let marked = if sp.marked.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "  ✔ {} marked, {} — d to delete ",
+            sp.marked.len(),
+            fmt_size(sp.marked_total())
+        )
+    };
     let title = format!(
-        " 📊 {} — {}{} ",
+        " 📊 {} — {}{}{} ",
         util::pretty(&sp.path),
         fmt_size(sp.total()),
+        marked,
         if pending > 0 {
             format!(
                 "  {} measuring {} folder(s)…",
@@ -1008,8 +1122,7 @@ fn draw_space(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(
         List::new(items)
             .block(block(title))
-            .highlight_style(hl())
-            .highlight_symbol("▶ "),
+            .highlight_symbol(Span::styled("▶ ", Style::new().fg(ACCENT).bold())),
         area,
         &mut sp.state,
     );

@@ -600,12 +600,8 @@ fn broken_prefs() -> Vec<HealthItem> {
             "No corrupted file",
         )];
     }
-    let names: Vec<String> = bad
-        .iter()
-        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
-        .collect();
     vec![HealthItem::new("prefs", "Corrupted preferences", Status::Warn, format!("{} unreadable file(s)", bad.len()))
-        .advice(format!("A corrupted preference file can crash its app. Once removed, the app starts over with default settings.\n{}", names.join("\n")))
+        .advice("A corrupted preference file can crash its app. Once removed, the app starts over with default settings.")
         .fix(Fix::Trash { label: "Move to the Trash".into(), paths: bad })]
 }
 
