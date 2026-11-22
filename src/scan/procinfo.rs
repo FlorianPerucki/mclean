@@ -98,13 +98,11 @@ pub fn note(p: &ProcInfo, vm_apps: &[&str]) -> String {
     let arg = |flag: &str| p.args.split_whitespace().any(|a| a.starts_with(flag));
     if name.starts_with("com.apple.Virtualization.VirtualMachine") {
         let who = if vm_apps.is_empty() {
-            "started by an app such as Docker, OrbStack, UTM or Claude".to_string()
+            "Docker, OrbStack, UTM, Claude…".to_string()
         } else {
-            format!("VM apps running now: {}", vm_apps.join(", "))
+            format!("running now: {}", vm_apps.join(", "))
         };
-        return format!(
-            "a virtual machine (Apple Virtualization framework); its RAM counts here — {who}. Stop the VM in its app to free it."
-        );
+        return format!("virtual machine started by a VM app ({who}). Stop the VM to free it.");
     }
     if name == "plugin-container" {
         let kind = match p.args.split_whitespace().last().unwrap_or("") {
@@ -176,7 +174,7 @@ pub fn note(p: &ProcInfo, vm_apps: &[&str]) -> String {
         return d.to_string();
     }
     match app {
-        Some(a) if a == name => format!("{a}: main process"),
+        Some(a) if a.eq_ignore_ascii_case(name) => format!("{a}: main process"),
         Some(a) => format!("part of {a}"),
         None if p.exe.starts_with("/System/") || p.exe.starts_with("/usr/") => {
             "macOS system process".into()
@@ -239,7 +237,9 @@ mod tests {
             "/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine",
             "",
         );
-        assert!(note(&vm, &["Claude (desktop workspace)"]).contains("VM apps running now: Claude"));
+        assert!(note(&vm, &["Claude (desktop workspace)"]).contains("running now: Claude"));
+        let main = pi("/Applications/Firefox.app/Contents/MacOS/firefox", "");
+        assert_eq!(note(&main, &[]), "Firefox: main process");
         assert_eq!(
             vm_apps_in(
                 "/Applications/Docker.app/Contents/MacOS/com.docker.backend\n/sbin/launchd\n"
