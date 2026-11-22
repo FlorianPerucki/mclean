@@ -761,16 +761,16 @@ impl App {
                 let n = self.health.len();
                 match k.code {
                     KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Char(' ') => {
-                        match self.health_files() {
-                            Some(paths) if !paths.is_empty() => {
+                        match self.health_picks() {
+                            Some(picks) if !picks.is_empty() => {
                                 let mut state = ListState::default();
                                 state.select(Some(0));
                                 self.health_pick = Some(HealthPick {
-                                    ticked: vec![false; paths.len()],
+                                    ticked: vec![false; picks.len()],
                                     state,
                                 });
                             }
-                            _ => self.toast = Some("No files to pick for this item.".into()),
+                            _ => self.toast = Some("Nothing to pick for this item.".into()),
                         }
                     }
                     KeyCode::Up | KeyCode::Char('k') => move_sel(&mut self.health_state, n, -1),
@@ -789,7 +789,7 @@ impl App {
                         };
                         match &h.fix {
                             None => self.toast = Some("No automatic action for this item.".into()),
-                            Some(Fix::Shell { label, cmd }) => {
+                            Some(Fix::Shell { label, cmd } | Fix::ShellEach { label, cmd, .. }) => {
                                 self.modal = Some(Modal::ConfirmShell {
                                     label: label.clone(),
                                     cmd: cmd.clone(),
@@ -1004,21 +1004,25 @@ impl App {
         }
     }
 
-    /// Files the selected health item would move to the Trash.
-    pub fn health_files(&self) -> Option<&Vec<PathBuf>> {
-        let h = self.health.get(self.health_state.selected()?)?;
-        match &h.fix {
-            Some(Fix::Trash { paths, .. }) => Some(paths),
-            _ => None,
-        }
+    fn health_fix(&self) -> Option<&Fix> {
+        self.health.get(self.health_state.selected()?)?.fix.as_ref()
+    }
+
+    /// Lines of the selected health item that can be ticked one by one.
+    pub fn health_picks(&self) -> Option<Vec<String>> {
+        self.health_fix()?.pick_labels()
     }
 
     fn on_health_pick_key(&mut self, k: KeyEvent) {
-        let paths = self.health_files().cloned().unwrap_or_default();
+        let fix = self.health_fix().cloned();
+        let n = self.health_picks().map_or(0, |p| p.len());
+        let paths = match &fix {
+            Some(Fix::Trash { paths, .. }) => paths.clone(),
+            _ => vec![],
+        };
         let Some(pick) = &mut self.health_pick else {
             return;
         };
-        let n = paths.len();
         let cur = pick.state.selected().filter(|&i| i < n);
         match k.code {
             KeyCode::Up | KeyCode::Char('k') => move_sel(&mut pick.state, n, -1),
@@ -1039,6 +1043,28 @@ impl App {
                 if let Some(p) = cur.and_then(|i| paths.get(i)) {
                     let p = p.clone();
                     self.reveal(&p);
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('d') | KeyCode::Delete
+                if matches!(fix, Some(Fix::ShellEach { .. })) =>
+            {
+                let Some(Fix::ShellEach { label, items, .. }) = fix else {
+                    return;
+                };
+                let cmds: Vec<&str> = items
+                    .iter()
+                    .zip(&pick.ticked)
+                    .filter(|(_, t)| **t)
+                    .map(|(i, _)| i.1.as_str())
+                    .collect();
+                if cmds.is_empty() {
+                    self.toast =
+                        Some("Nothing ticked: tick entries with Space (a for all).".into());
+                } else {
+                    self.modal = Some(Modal::ConfirmShell {
+                        label: format!("{label} — {} selected", cmds.len()),
+                        cmd: cmds.join("; "),
+                    });
                 }
             }
             KeyCode::Enter | KeyCode::Char('d') | KeyCode::Delete => {

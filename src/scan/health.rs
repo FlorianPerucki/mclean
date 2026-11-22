@@ -290,12 +290,17 @@ fn time_machine() -> Vec<HealthItem> {
         }
     }
     if let Some(out) = run("tmutil", &["listlocalsnapshots", "/"]) {
-        let n = out.lines().filter(|l| l.contains("com.apple")).count();
+        let items: Vec<(String, String)> = out.lines().filter_map(snapshot_item).collect();
+        let n = items.len();
         if n > 0 {
             v.push(
                 HealthItem::new("snapshots", "Local APFS snapshots", Status::Info, format!("{n} local snapshot(s)"))
                     .advice("macOS removes them automatically when space runs low, but they can hide several GB. Deleting them frees the space right away.")
-                    .fix(Fix::Shell { label: "Delete local snapshots".into(), cmd: "tmutil thinlocalsnapshots / 999999999999 4".into() }),
+                    .fix(Fix::ShellEach {
+                        label: "Delete local snapshots".into(),
+                        cmd: "tmutil thinlocalsnapshots / 999999999999 4".into(),
+                        items,
+                    }),
             );
         }
     }
@@ -385,6 +390,64 @@ fn parse_top_size(s: &str) -> Option<u64> {
         _ => return None,
     };
     Some((n * mult) as u64)
+}
+
+/// A line of `tmutil listlocalsnapshots /` → (what the user sees, command deleting it).
+fn snapshot_item(line: &str) -> Option<(String, String)> {
+    let name = line.trim();
+    if !name.starts_with("com.apple") || name.contains([' ', '\'']) {
+        return None;
+    }
+    // com.apple.TimeMachine.2026-11-27-083000.local
+    if let Some(date) = name
+        .strip_prefix("com.apple.TimeMachine.")
+        .map(|d| d.trim_end_matches(".local"))
+    {
+        let when = match date.as_bytes() {
+            [
+                _,
+                _,
+                _,
+                _,
+                b'-',
+                _,
+                _,
+                b'-',
+                _,
+                _,
+                b'-',
+                h1,
+                h2,
+                m1,
+                m2,
+                s1,
+                s2,
+            ] => format!(
+                "{} {}{}:{}{}:{}{}",
+                &date[..10],
+                *h1 as char,
+                *h2 as char,
+                *m1 as char,
+                *m2 as char,
+                *s1 as char,
+                *s2 as char
+            ),
+            _ => date.to_string(),
+        };
+        return Some((
+            format!("Time Machine snapshot of {when}"),
+            format!("tmutil deletelocalsnapshots {date}"),
+        ));
+    }
+    let kind = if name.starts_with("com.apple.os.update") {
+        "macOS update snapshot (rollback point)"
+    } else {
+        "system snapshot"
+    };
+    Some((
+        format!("{kind}: {name}"),
+        format!("sudo diskutil apfs deleteSnapshot /System/Volumes/Data -name '{name}'"),
+    ))
 }
 
 fn memory() -> Vec<HealthItem> {
@@ -789,10 +852,17 @@ fn homebrew() -> Vec<HealthItem> {
         Duration::from_secs(30),
         false,
     ) {
-        let n = out
+        let names: Vec<String> = out
             .lines()
             .filter(|l| !l.starts_with("==>") && !l.trim().is_empty())
-            .count();
+            .flat_map(|l| l.split_whitespace())
+            .filter(|w| {
+                w.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "@+-_./".contains(c))
+            })
+            .map(str::to_string)
+            .collect();
+        let n = names.len();
         if n > 0 {
             v.push(
                 HealthItem::new(
@@ -801,9 +871,14 @@ fn homebrew() -> Vec<HealthItem> {
                     Status::Info,
                     format!("{n} dependency(ies) no longer needed"),
                 )
-                .fix(Fix::Shell {
+                .advice("Installed as dependencies of formulae you have since removed; nothing uses them now.")
+                .fix(Fix::ShellEach {
                     label: "brew autoremove".into(),
                     cmd: "brew autoremove".into(),
+                    items: names
+                        .iter()
+                        .map(|w| (w.clone(), format!("brew uninstall '{w}'")))
+                        .collect(),
                 }),
             );
         }
@@ -866,6 +941,18 @@ fn simulators() -> Vec<HealthItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_items() {
+        let (shown, cmd) = snapshot_item("com.apple.TimeMachine.2026-11-27-083015.local").unwrap();
+        assert_eq!(shown, "Time Machine snapshot of 2026-11-27 08:30:15");
+        assert_eq!(cmd, "tmutil deletelocalsnapshots 2026-11-27-083015");
+        let (shown, cmd) = snapshot_item("com.apple.os.update-ABC123").unwrap();
+        assert!(shown.starts_with("macOS update snapshot"));
+        assert!(cmd.contains("-name 'com.apple.os.update-ABC123'"));
+        assert!(snapshot_item("Snapshots for disk /:").is_none());
+        assert!(snapshot_item("com.apple.x'; rm -rf ~").is_none());
+    }
 
     #[test]
     fn parses_top_compressed() {

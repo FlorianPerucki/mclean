@@ -150,9 +150,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             "↑↓ · Space tick · Tab expand/fold · → ← · a all · Enter clean · o Finder · p mode · Esc back"
         }
         Screen::Health if app.health_pick.is_some() => {
-            "↑↓ · Space tick · a all · Enter trash ticked · o Finder · ← back to the list"
+            "↑↓ · Space tick · a all · Enter run on ticked · o Finder · ← back to the list"
         }
-        Screen::Health => "↑↓ · Enter fix · → / Space pick files · r check again · Esc back",
+        Screen::Health => "↑↓ · Enter fix · → / Space pick one by one · r check again · Esc back",
         Screen::Apps => "↑↓ · Enter uninstall · / filter · s size · n name · o Finder · Esc back",
         Screen::Uninstall => "↑↓ · Space tick · Enter uninstall · o Finder · Esc back",
         Screen::Space => {
@@ -822,10 +822,11 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
         .selected()
         .and_then(|i| app.health.get(i))
         .map_or(11, |h| {
-            let files = match &h.fix {
-                Some(Fix::Trash { paths, .. }) => paths.len() + 3,
-                _ => 2,
-            };
+            let files = h
+                .fix
+                .as_ref()
+                .and_then(|x| x.pick_labels())
+                .map_or(2, |p| p.len() + 3);
             ((h.advice.lines().count() + files + 5) as u16).clamp(11, (area.height / 2).max(11))
         });
     let [top, bottom] =
@@ -879,11 +880,7 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
     for l in h.advice.lines() {
         lines.push(Line::from(l.to_string()));
     }
-    let files = match &h.fix {
-        Some(Fix::Trash { paths, .. }) => Some(paths),
-        _ => None,
-    };
-    let Some(files) = files else {
+    let Some(files) = h.fix.as_ref().and_then(|x| x.pick_labels()) else {
         if let Some(fx) = &h.fix {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -902,6 +899,7 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Item with files to trash: they are listed and can be ticked one by one.
     let label = h.fix.as_ref().map(|x| x.label()).unwrap_or_default();
+    let is_files = matches!(h.fix, Some(Fix::Trash { .. }));
     let picking = app.health_pick.is_some();
     let ticked: Vec<bool> = app
         .health_pick
@@ -912,14 +910,23 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![
             "Space tick · a all · ".fg(DIM),
             Span::styled(
-                format!("Enter: move {n_ticked} ticked file(s) to the Trash"),
+                if is_files {
+                    format!("Enter: move {n_ticked} ticked file(s) to the Trash")
+                } else {
+                    format!("Enter: {label} — {n_ticked} ticked")
+                },
                 Style::new().fg(ACCENT).bold(),
             ),
-            " · o Finder · ← back".fg(DIM),
+            if is_files {
+                " · o Finder · ← back"
+            } else {
+                " · ← back"
+            }
+            .fg(DIM),
         ])
     } else {
         Line::from(vec![
-            Span::styled("→ / Space: pick files", Style::new().fg(ACCENT).bold()),
+            Span::styled("→ / Space: pick one by one", Style::new().fg(ACCENT).bold()),
             format!(" · Enter: {label} (all {})", files.len()).fg(DIM),
         ])
     };
@@ -934,7 +941,7 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
                 0
             };
             let mut spans = checkbox(st);
-            spans.push(Span::raw(util::pretty(p)));
+            spans.push(Span::raw(p.clone()));
             let cur =
                 picking && app.health_pick.as_ref().and_then(|x| x.state.selected()) == Some(k);
             ListItem::new(with_cursor(spans, cur, 0))

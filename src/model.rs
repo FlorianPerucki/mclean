@@ -301,12 +301,32 @@ pub enum Fix {
     Shell { label: String, cmd: String },
     /// Files to move to the Trash.
     Trash { label: String, paths: Vec<PathBuf> },
+    /// Entries that can be picked one by one: `cmd` handles all of them,
+    /// each item is (what the user sees, command for that entry alone).
+    ShellEach {
+        label: String,
+        cmd: String,
+        items: Vec<(String, String)>,
+    },
 }
 
 impl Fix {
     pub fn label(&self) -> &str {
         match self {
-            Fix::Shell { label, .. } | Fix::Trash { label, .. } => label,
+            Fix::Shell { label, .. } | Fix::Trash { label, .. } | Fix::ShellEach { label, .. } => {
+                label
+            }
+        }
+    }
+
+    /// Lines the user can tick one by one, if this fix has any.
+    pub fn pick_labels(&self) -> Option<Vec<String>> {
+        match self {
+            Fix::Shell { .. } => None,
+            Fix::Trash { paths, .. } => {
+                Some(paths.iter().map(|p| crate::util::pretty(p)).collect())
+            }
+            Fix::ShellEach { items, .. } => Some(items.iter().map(|i| i.0.clone()).collect()),
         }
     }
 }
