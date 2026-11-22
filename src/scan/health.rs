@@ -497,17 +497,73 @@ fn battery() -> Vec<HealthItem> {
 
 // ───────────────────────────── Configuration ─────────────────────────────
 
-fn program_of(plist: &Path) -> Option<String> {
-    let v = plist::Value::from_file(plist).ok()?;
-    let d = v.as_dictionary()?;
-    if let Some(p) = d.get("Program").and_then(|v| v.as_string()) {
-        return Some(p.to_string());
+/// Reads a plist. The plist crate rejects a few files macOS itself accepts,
+/// so on macOS `plutil` gets the last word before a file is called corrupt.
+fn read_plist(p: &Path) -> Result<plist::Value, String> {
+    let err = match plist::Value::from_file(p) {
+        Ok(v) => return Ok(v),
+        Err(e) => e.to_string(),
+    };
+    if util::is_macos() {
+        let path = p.to_string_lossy();
+        if let Some(json) = run("plutil", &["-convert", "json", "-o", "-", &path])
+            && let Ok(v) = serde_json::from_str::<serde_json::Value>(&json)
+        {
+            return Ok(json_to_plist(v));
+        }
+        if run("plutil", &["-lint", &path]).is_some() {
+            // Valid for macOS, just not convertible (dates, data…): not corrupt.
+            return Ok(plist::Value::Dictionary(Default::default()));
+        }
+        if let Some(msg) = util::run_full("plutil", &["-lint", &path], Duration::from_secs(5), true)
+        {
+            let msg = msg
+                .trim()
+                .rsplit(": ")
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !msg.is_empty() {
+                return Err(msg);
+            }
+        }
     }
-    d.get("ProgramArguments")?
-        .as_array()?
-        .first()?
-        .as_string()
-        .map(|s| s.to_string())
+    Err(err)
+}
+
+fn json_to_plist(v: serde_json::Value) -> plist::Value {
+    use serde_json::Value as J;
+    match v {
+        J::Null => plist::Value::String(String::new()),
+        J::Bool(b) => plist::Value::Boolean(b),
+        J::Number(n) => n
+            .as_i64()
+            .map(|i| plist::Value::Integer(i.into()))
+            .unwrap_or_else(|| plist::Value::Real(n.as_f64().unwrap_or(0.0))),
+        J::String(s) => plist::Value::String(s),
+        J::Array(a) => plist::Value::Array(a.into_iter().map(json_to_plist).collect()),
+        J::Object(o) => {
+            plist::Value::Dictionary(o.into_iter().map(|(k, v)| (k, json_to_plist(v))).collect())
+        }
+    }
+}
+
+/// Program an agent starts: Ok(None) when it names none we can check
+/// (BundleProgram, MachServices only…), Err when the file cannot be read.
+fn program_of(plist: &Path) -> Result<Option<String>, String> {
+    let v = read_plist(plist)?;
+    let Some(d) = v.as_dictionary() else {
+        return Err("not a dictionary".into());
+    };
+    if let Some(p) = d.get("Program").and_then(|v| v.as_string()) {
+        return Ok(Some(p.to_string()));
+    }
+    Ok(d.get("ProgramArguments")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_string()))
 }
 
 fn launch_items() -> Vec<HealthItem> {
@@ -532,18 +588,30 @@ fn launch_items() -> Vec<HealthItem> {
             total += 1;
             let name = p.file_name().unwrap().to_string_lossy().to_string();
             match program_of(&p) {
-                None => {
-                    out.push(
-                        HealthItem::new(
-                            &format!("launch:{name}"),
-                            &format!("Unreadable agent: {name}"),
-                            Status::Warn,
-                            format!("{} is not a valid plist", util::pretty(&p)),
-                        )
-                        .advice("launchd ignores this file. It can be safely deleted."),
-                    );
+                Err(e) => {
+                    let item = HealthItem::new(
+                        &format!("launch:{name}"),
+                        &format!("Unreadable agent: {name}"),
+                        Status::Warn,
+                        format!("{} is not a valid plist", util::pretty(&p)),
+                    )
+                    .advice(format!(
+                        "Neither launchd nor plutil can read this file ({e}), so it never runs. It can be safely deleted."
+                    ));
+                    out.push(if user {
+                        item.fix(Fix::Trash {
+                            label: "Move the agent to the Trash".into(),
+                            paths: vec![p.clone()],
+                        })
+                    } else {
+                        item.fix(Fix::Shell {
+                            label: "Remove (sudo)".into(),
+                            cmd: format!("sudo mv '{}' ~/.Trash/", p.display()),
+                        })
+                    });
                 }
-                Some(prog) if prog.starts_with('/') && !Path::new(&prog).exists() => {
+                Ok(None) => {}
+                Ok(Some(prog)) if prog.starts_with('/') && !Path::new(&prog).exists() => {
                     let item = HealthItem::new(&format!("launch:{name}"), &format!("Broken agent: {name}"), Status::Fail, format!("Launches {prog}, which no longer exists"))
                         .advice("Leftover of an uninstalled app. launchd keeps trying to start it (errors in the logs, slower startup).");
                     out.push(if user {
@@ -555,7 +623,7 @@ fn launch_items() -> Vec<HealthItem> {
                         })
                     });
                 }
-                Some(prog) if util::is_macos() && prog.starts_with('/') => {
+                Ok(Some(prog)) if util::is_macos() && prog.starts_with('/') => {
                     let is_script = std::fs::read(&prog)
                         .map(|b| b.starts_with(b"#!"))
                         .unwrap_or(true);
@@ -590,7 +658,7 @@ fn broken_prefs() -> Vec<HealthItem> {
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "plist"))
         .filter(|p| std::fs::metadata(p).map(|m| m.len() > 0).unwrap_or(false))
-        .filter(|p| plist::Value::from_file(p).is_err())
+        .filter(|p| read_plist(p).is_err())
         .collect();
     if bad.is_empty() {
         return vec![HealthItem::new(
