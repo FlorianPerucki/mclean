@@ -46,6 +46,35 @@ fn status_color(s: Status) -> Color {
     }
 }
 
+/// Rows a paragraph takes once word-wrapped at this width (same greedy
+/// wrapping as ratatui's `Wrap`: words move to the next row, longer words split).
+fn wrapped_height(lines: &[Line], width: u16) -> u16 {
+    let w = width.max(1) as usize;
+    let mut rows = 0usize;
+    for line in lines {
+        let text = line.to_string();
+        let mut row = 1;
+        let mut used = 0usize;
+        for word in text.split(' ') {
+            let ww = Line::from(word).width();
+            let need = if used == 0 { ww } else { used + 1 + ww };
+            if need <= w {
+                used = need;
+            } else if ww <= w {
+                row += 1;
+                used = ww;
+            } else {
+                // Word longer than a row: it is split across rows.
+                let rest = if used == 0 { ww } else { ww + used + 1 };
+                row += rest.div_ceil(w) - 1;
+                used = rest % w;
+            }
+        }
+        rows += row;
+    }
+    rows as u16
+}
+
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width.saturating_sub(2));
     let h = h.min(area.height.saturating_sub(2));
@@ -150,7 +179,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             "↑↓ · Space tick · Tab expand/fold · → ← · a all · Enter clean · o Finder · p mode · Esc back"
         }
         Screen::Health if app.health_pick.is_some() => {
-            "↑↓ · Space tick · a all · Enter run on ticked · o Finder · ← back to the list"
+            "↑↓ · Space tick · a all · Enter run on ticked · ← back to the list"
         }
         Screen::Health => "↑↓ · Enter fix · → / Space pick one by one · r check again · Esc back",
         Screen::Apps => "↑↓ · Enter uninstall · / filter · s size · n name · o Finder · Esc back",
@@ -827,7 +856,12 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
                 .as_ref()
                 .and_then(|x| x.pick_labels())
                 .map_or(2, |p| p.len() + 3);
-            ((h.advice.lines().count() + files + 5) as u16).clamp(11, (area.height / 2).max(11))
+            let text: Vec<Line> = std::iter::once(h.message.as_str())
+                .chain(h.advice.lines())
+                .map(|l| Line::from(l.to_string()))
+                .collect();
+            (wrapped_height(&text, area.width.saturating_sub(2)) + files as u16 + 4)
+                .clamp(11, (area.height / 2).max(11))
         });
     let [top, bottom] =
         Layout::vertical([Constraint::Min(5), Constraint::Length(details_h)]).areas(area);
@@ -930,7 +964,6 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
             format!(" · Enter: {label} (all {})", files.len()).fg(DIM),
         ])
     };
-    let text_h = lines.len() as u16;
     let rows: Vec<ListItem> = files
         .iter()
         .enumerate()
@@ -955,6 +988,7 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
     let blk = block(" Details ").border_style(border);
     let inner = blk.inner(bottom);
     f.render_widget(blk, bottom);
+    let text_h = wrapped_height(&lines, inner.width);
     let [t, l, hn] = Layout::vertical([
         Constraint::Length(text_h),
         Constraint::Min(1),
