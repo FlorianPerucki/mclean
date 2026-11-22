@@ -88,6 +88,8 @@ fn row_style(state: u8) -> Style {
 }
 
 const CURSOR_BG: Color = Color::Rgb(40, 60, 80);
+const CURSOR_FG: Color = Color::Rgb(240, 244, 248);
+const CURSOR_DIM: Color = Color::Rgb(165, 180, 195);
 
 /// Paints the cursor bar on every span except the tick box (spans[box_at]),
 /// so the box keeps its colour on the current line. Text colours that would
@@ -99,8 +101,13 @@ fn with_cursor(mut spans: Vec<Span<'static>>, cursor: bool, box_at: usize) -> Li
             if k != box_at {
                 sp.style = sp.style.bg(CURSOR_BG).add_modifier(Modifier::BOLD);
                 sp.style = match sp.style.fg {
-                    Some(DIM) => sp.style.fg(Color::Gray),
-                    Some(Color::LightBlue | Color::Blue) => sp.style.fg(Color::White),
+                    // Default text is black on a light terminal theme: always
+                    // force light text on the dark bar (RGB, so themes can't remap it).
+                    None
+                    | Some(
+                        Color::Reset | Color::Black | Color::White | Color::Blue | Color::LightBlue,
+                    ) => sp.style.fg(CURSOR_FG),
+                    Some(DIM | Color::Gray) => sp.style.fg(CURSOR_DIM),
                     _ => sp.style,
                 };
             }
@@ -340,7 +347,7 @@ fn draw_menu(f: &mut Frame, app: &mut App, area: Rect) {
     let list = List::new(list_items)
         .block(block(title))
         .highlight_style(hl())
-        .highlight_symbol("▶ ");
+        .highlight_symbol(Span::styled("▶ ", Style::new().fg(ACCENT).bold()));
     f.render_stateful_widget(list, left, &mut app.menu_state);
 
     let sel = app
@@ -852,7 +859,7 @@ fn draw_health(f: &mut Frame, app: &mut App, area: Rect) {
         List::new(items)
             .block(block(" 🩺 Health & configuration "))
             .highlight_style(hl())
-            .highlight_symbol("▶ "),
+            .highlight_symbol(Span::styled("▶ ", Style::new().fg(ACCENT).bold())),
         top,
         &mut app.health_state,
     );
@@ -998,7 +1005,7 @@ fn draw_apps(f: &mut Frame, app: &mut App, area: Rect) {
         List::new(items)
             .block(block(title))
             .highlight_style(hl())
-            .highlight_symbol("▶ "),
+            .highlight_symbol(Span::styled("▶ ", Style::new().fg(ACCENT).bold())),
         area,
         &mut app.apps_state,
     );
