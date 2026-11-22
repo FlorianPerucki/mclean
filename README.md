@@ -12,6 +12,8 @@ make
 ./mclean
 ```
 
+![mclean: main menu after a scan](docs/screenshots/menu.png)
+
 ## Install
 
 You need Rust (once):
@@ -53,6 +55,23 @@ enable your terminal app (Terminal, iTerm2, Ghostty…), then restart mclean.
 | 🩺 Health | Disk space, FileVault, firewall, Gatekeeper, SIP, updates, Time Machine, APFS snapshots, swap, memory, battery, Spotlight, broken or unsigned launch agents, corrupted preferences, broken links, Homebrew, Docker, Xcode simulators | — |
 | 📊 Disk space | Size-sorted explorer, folder by folder (ncdu / Space Lens style) | — |
 
+### A quick tour
+
+Pick files one by one inside a category (`Tab` expands a line, `Space` ticks):
+
+![Developer junk category with Xcode DerivedData expanded](docs/screenshots/category.png)
+
+Health checks come with fixes; entries such as local snapshots, Homebrew orphans or
+corrupted preference files can be ticked one by one:
+
+![Health screen, picking two local APFS snapshots to delete](docs/screenshots/health.png)
+
+The disk space explorer: mark any file or folder with `Space`, delete the marks with `d`:
+
+![Disk space explorer with three files marked in Downloads](docs/screenshots/space.png)
+
+<sub>Screenshots are taken on a fake home folder: names and sizes are made up.</sub>
+
 ### What is the smart clean?
 
 It gathers every item marked **safe** across all categories (caches, logs, installers
@@ -85,6 +104,21 @@ gets its own checkbox (e.g. pick only some of the logs in "User logs", or only s
 DerivedData projects). **Tab** again (or **←**) folds it. A partially ticked line shows `[~]`;
 only the ticked sub-items are cleaned.
 
+### Health: pick entries one by one
+
+Some health items act on a list: corrupted preference files, unreadable launch agents,
+local APFS snapshots, orphaned Homebrew dependencies. `Enter` on the item handles them
+all; `→` or `Space` moves into the list in Details, where `Space` ticks entries and
+`Enter` handles only the ticked ones. The Swap item lists the processes holding the most
+compressed memory (what macOS swaps out) with their path and what they are.
+
+### Disk space explorer
+
+`e` from the menu. `Enter`/`→` opens a folder, `←` goes up. `Space` marks a file or folder
+(marks are kept while you browse; what is inside a marked folder shows `~`), `d` deletes
+everything marked after a confirmation (or the current line when nothing is marked),
+`u` clears the marks.
+
 ## Keys
 
 | Key | Action |
@@ -95,12 +129,13 @@ only the ticked sub-items are cleaned.
 | `→` / `l` | expand an item |
 | `←` / `h` | collapse, or go back |
 | `Esc` / `q` | go back one step (`q` quits from the menu) |
-| `Space` | tick / untick |
+| `Space` | tick / untick (mark, in the disk explorer) |
 | `a` | tick / untick everything |
 | `o` | show in Finder |
 | `p` | switch Trash ⇄ permanent deletion |
 | `s` `m` `d` | smart clean, select manually, delete selected (from the menu) |
 | `e` `u` | explore disk space, uninstall (from the menu) |
+| `d` / `u` | disk explorer: delete marked items / clear the marks |
 | `1`–`9` | jump to a menu entry |
 | `r` | scan again |
 | `?` | help |
