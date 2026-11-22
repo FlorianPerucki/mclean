@@ -1,6 +1,7 @@
 pub mod dupes;
 pub mod health;
 pub mod home;
+pub mod procinfo;
 
 use crate::model::{Finding, HealthItem};
 use crate::{apps, rules, util};

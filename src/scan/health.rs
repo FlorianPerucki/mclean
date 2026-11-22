@@ -410,11 +410,29 @@ fn memory() -> Vec<HealthItem> {
         let mut advice = String::from(
             "High swap means RAM is short: quit memory-hungry apps (browser with many tabs, Docker, VMs) or restart.",
         );
-        let top = top_compressed();
+        let mut top = top_compressed();
+        top.truncate(6);
         if !top.is_empty() {
+            use super::procinfo;
+            let pids: Vec<u32> = top.iter().map(|t| t.1).collect();
+            let info = procinfo::lookup(&pids);
+            let vm_apps = procinfo::running_vm_apps();
             advice.push_str("\nmacOS does not report swap per process. What it swaps out is compressed memory; the biggest users:");
-            for (name, pid, b) in top {
-                advice.push_str(&format!("\n  {:>9}  {name} (pid {pid})", util::fmt_size(b)));
+            for (short, pid, b) in top {
+                let size = util::fmt_size(b);
+                match info.get(&pid) {
+                    Some(p) => {
+                        advice.push_str(&format!("\n  {size:>9}  {} (pid {pid})", p.name()));
+                        let note = procinfo::note(p, &vm_apps);
+                        if !note.is_empty() {
+                            advice.push_str(&format!("\n             {note}"));
+                        }
+                        advice
+                            .push_str(&format!("\n             {}", procinfo::pretty_exe(&p.exe)));
+                    }
+                    // Gone since top ran, or ps unavailable.
+                    None => advice.push_str(&format!("\n  {size:>9}  {short} (pid {pid})")),
+                }
             }
         }
         v.push(
